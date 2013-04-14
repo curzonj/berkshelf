@@ -18,6 +18,37 @@ module Berkshelf
       end
 
       # Copy all cached_cookbooks to the given directory. Each cookbook will be contained in
+      # a directory named after the name of the cookbook. This only copies the cookbooks not
+      # in the current directory, ie. remote cookbooks.
+      #
+      # @param [Array<CachedCookbook>] cookbooks
+      #   an array of CachedCookbooks to be copied to a vendor directory
+      # @param [String] path
+      #   filepath to vendor cookbooks to
+      #
+      # @return [String]
+      #   expanded filepath to the vendor directory
+      def download(cookbooks, path)
+        path       = File.expand_path(path)
+        scratch    = Berkshelf.mktmpdir
+        cwd = Dir.pwd
+
+        FileUtils.mkdir_p(path)
+
+        cookbooks.each do |cb|
+          next if cb.path.to_s.start_with?(cwd)
+
+          dest = File.join(scratch, cb.cookbook_name)
+          FileUtils.cp_r(cb.path, dest)
+        end
+
+        FileUtils.remove_dir(path, force: true)
+        FileUtils.mv(scratch, path)
+
+        path
+      end
+
+      # Copy all cached_cookbooks to the given directory. Each cookbook will be contained in
       # a directory named after the name of the cookbook.
       #
       # @param [Array<CachedCookbook>] cookbooks
@@ -362,6 +393,10 @@ module Berkshelf
     # @option options [String] :path
     #   a path to "vendor" the cached_cookbooks resolved by the resolver. Vendoring
     #   is a technique for packaging all cookbooks resolved by a Berksfile.
+    # @option options [String] :download
+    #   a path to "vendor" the cached_cookbooks resolved by the resolver. Vendoring
+    #   is a technique for packaging all cookbooks resolved by a Berksfile. This
+    #   only vendors the non-local cookbooks.
     #
     # @return [Array<Berkshelf::CachedCookbook>]
     def install(options = {})
@@ -372,6 +407,8 @@ module Berkshelf
 
       if options[:path]
         self.class.vendor(@cached_cookbooks, options[:path])
+      else options[:download]
+        self.class.download(@cached_cookbooks, options[:download])
       end
 
       self.cached_cookbooks
