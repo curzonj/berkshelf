@@ -62,6 +62,7 @@ module Berkshelf
         chefignore = nil
         path       = File.expand_path(path)
         scratch    = Berkshelf.mktmpdir
+        cwd = Dir.pwd
 
         FileUtils.mkdir_p(path)
 
@@ -70,6 +71,8 @@ module Berkshelf
         end
 
         cookbooks.each do |cb|
+          next if cb.path.to_s.start_with?(cwd)
+
           dest = File.join(scratch, cb.cookbook_name, "/")
           FileUtils.mkdir_p(dest)
 
