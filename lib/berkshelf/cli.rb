@@ -149,11 +149,6 @@ module Berkshelf
       desc: "Path to a Berksfile to operate off of.",
       aliases: "-b",
       banner: "PATH"
-    method_option :download,
-      type: :string,
-      desc: "Path to install remote cookbooks to (i.e. vendor/cookbooks).",
-      aliases: "-d",
-      banner: "PATH"
     method_option :path,
       type: :string,
       desc: "Path to install cookbooks to (i.e. vendor/cookbooks).",
