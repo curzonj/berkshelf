@@ -1,6 +1,4 @@
 module Berkshelf
-  # @author Michael Ivey <michael.ivey@riotgames.com>
-  # @author Jamie Winsor <reset@riotgames.com>
   module Formatters
     class << self
       @@formatters = Hash.new
@@ -47,15 +45,11 @@ module Berkshelf
       alias_method :[], :get
     end
 
-    # @author Michael Ivey <michael.ivey@riotgames.com>
-    #
     # @abstract Include and override {#install} {#use} {#upload}
     #   {#msg} {#error} to implement.
     #
     #   Implement {#cleanup_hook} to run any steps required to run after the task is finished
     module AbstractFormatter
-      extend ActiveSupport::Concern
-
       module ClassMethods
         # @param [Symbol] id
         #
@@ -69,28 +63,39 @@ module Berkshelf
         end
       end
 
+      class << self
+        def included(base)
+          base.send(:extend, ClassMethods)
+        end
+
+        private
+
+          def formatter_methods(*args)
+            args.each do |meth|
+              define_method(meth.to_sym) do |*args|
+                raise AbstractFunction, "##{meth} must be implemented on #{self.class}"
+              end unless respond_to?(meth.to_sym)
+            end
+          end
+      end
+
+      formatter_methods :error,
+                        :warn,
+                        :fetch,
+                        :install,
+                        :list,
+                        :msg,
+                        :outdated,
+                        :package,
+                        :skip,
+                        :show,
+                        :upload,
+                        :use,
+                        :vendor,
+                        :version
+
       def cleanup_hook
         # run after the task is finished
-      end
-
-      def install(cookbook, version, location)
-        raise AbstractFunction, "#install must be implemented on #{self.class}"
-      end
-
-      def use(cookbook, version, path = nil)
-        raise AbstractFunction, "#install must be implemented on #{self.class}"
-      end
-
-      def upload(cookbook, version, chef_server_url)
-        raise AbstractFunction, "#upload must be implemented on #{self.class}"
-      end
-
-      def msg(message)
-        raise AbstractFunction, "#msg must be implemented on #{self.class}"
-      end
-
-      def error(message)
-        raise AbstractFunction, "#error must be implemented on #{self.class}"
       end
 
       private
@@ -101,5 +106,5 @@ module Berkshelf
 end
 
 Dir["#{File.dirname(__FILE__)}/formatters/*.rb"].sort.each do |path|
-  require "berkshelf/formatters/#{File.basename(path, '.rb')}"
+  require_relative "formatters/#{File.basename(path, '.rb')}"
 end

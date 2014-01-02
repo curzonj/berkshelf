@@ -1,36 +1,35 @@
 require 'spec_helper'
 
-
-describe Thor::Shell::Color do
+describe Thor::Base.shell do
   let(:stdout) { double('stdout') }
   let(:stderr) { double('stderr') }
 
   before do
-    Thor::Shell::Basic.any_instance.stub(:stdout).and_return(stdout)
-    Thor::Shell::Basic.any_instance.stub(:stderr).and_return(stderr)
+    described_class.any_instance.stub(:stdout).and_return(stdout)
+    described_class.any_instance.stub(:stderr).and_return(stderr)
   end
 
-  context '#mute!' do
+  describe '#mute!' do
     it 'sets @mute to true' do
       subject.mute!
       expect(subject.instance_variable_get(:@mute)).to be_true
     end
   end
 
-  context '#unmute!' do
+  describe '#unmute!' do
     it 'sets @mute to false' do
       subject.unmute!
       expect(subject.instance_variable_get(:@mute)).to be_false
     end
   end
 
-  context '#say' do
+  describe '#say' do
     context 'when quiet?' do
       before do
         subject.stub(:quiet?).and_return(true)
       end
 
-      it 'does not output anything' do
+      it 'does not output anything', :not_supported_on_windows do
         stdout.should_not_receive(:puts)
         subject.say 'message'
       end
@@ -49,7 +48,7 @@ describe Thor::Shell::Color do
     end
   end
 
-  context '#say_status' do
+  describe '#say_status' do
     context 'when quiet?' do
       before do
         subject.stub(:quiet?).and_return(true)
@@ -67,14 +66,14 @@ describe Thor::Shell::Color do
       end
 
       it 'prints to stdout' do
-        stdout.should_receive(:puts).with("\e[1m\e[32m           5\e[0m  message")
+        stdout.should_receive(:puts).with(windows? ? "           5  message" : "\e[1m\e[32m           5\e[0m  message")
         stdout.should_receive(:flush).with(no_args())
         subject.say_status 5, 'message'
       end
     end
   end
 
-  context '#warn' do
+  describe '#warn' do
     context 'when quiet?' do
       before do
         subject.stub(:quiet?).and_return(true)
@@ -100,7 +99,7 @@ describe Thor::Shell::Color do
     end
   end
 
-  context '#deprecated' do
+  describe '#deprecated' do
     it 'prefixes the message with "[DEPRECATED]"' do
       subject.should_receive(:warn).with('[DEPRECATION] That was deprecated!')
       subject.deprecated 'That was deprecated!'
@@ -113,8 +112,8 @@ describe Thor::Shell::Color do
         subject.stub(:quiet?).and_return(true)
       end
 
-      it 'does not output anything' do
-        stdout.should_not_receive(:puts)
+      it "outputs an error message", :not_supported_on_windows do
+        stderr.should_receive(:puts)
         subject.error 'error!'
       end
     end
@@ -125,7 +124,7 @@ describe Thor::Shell::Color do
       end
 
       it 'prints to stderr' do
-        stderr.should_receive(:puts).with("\e[31merror!\e[0m")
+        stderr.should_receive(:puts).with(windows? ? "error!" : "\e[31merror!\e[0m")
         subject.error 'error!'
       end
     end

@@ -1,172 +1,101 @@
 module Berkshelf
-  # @author Jamie Winsor <reset@riotgames.com>
   class Resolver
+    require_relative 'resolver/graph'
+
     extend Forwardable
 
     # @return [Berkshelf::Berksfile]
     attr_reader :berksfile
-    # @return [Solve::Graph]
+
+    # @return [Resolver::Graph]
     attr_reader :graph
 
+    # @return [Array<Berkshelf::Dependency>]
+    #   an array of dependencies that must be satisfied
+    attr_reader :demands
+
     # @param [Berkshelf::Berksfile] berksfile
-    # @param [Hash] options
-    #
-    # @option options [Array<CookbookSource>, CookbookSource] sources
-    def initialize(berksfile, options = {})
-      @berksfile  = berksfile
-      @downloader = @berksfile.downloader
-      @graph      = Solve::Graph.new
-      @sources    = Hash.new
+    # @param [Array<Berkshelf::Dependency>, Berkshelf::Dependency] demands
+    #   a dependency, or array of dependencies, which must be satisfied
+    def initialize(berksfile, demands = [])
+      @berksfile = berksfile
+      @graph     = Graph.new
+      @demands   = Array.new
 
-      # Dependencies need to be added AFTER the sources. If they are
-      # not, then one of the dependencies of a source that is added
-      # may take precedence over an explicitly set source that appears
-      # later in the iterator.
-      Array(options[:sources]).each do |source|
-        add_source(source, false)
-      end
-
-      unless options[:skip_dependencies]
-        Array(options[:sources]).each do |source|
-          add_source_dependencies(source)
-        end
-      end
+      Array(demands).each { |demand| add_demand(demand) }
     end
 
-    # Add the given source to the collection of sources for this instance
-    # of Resolver. By default the dependencies of the given source will also
-    # be added as sources to the collection.
+    # Add the given dependency to the collection of demands
     #
-    # @param [Berkshelf::CookbookSource] source
-    #   source to add
-    # @param [Boolean] include_dependencies
-    #   adds the dependencies of the given source as sources to the collection of
-    #   if true. Dependencies will be ignored if false.
+    # @param [Berkshelf::Dependency] demand
+    #   add a dependency that must be satisfied to the graph
     #
-    # @return [Array<CookbookSource>]
-    def add_source(source, include_dependencies = true)
-      if has_source?(source)
-        raise DuplicateSourceDefined, "A source named '#{source.name}' is already present."
+    # @raise [DuplicateDemand]
+    #
+    # @return [Array<Berkshelf::Dependency>]
+    def add_demand(demand)
+      if has_demand?(demand)
+        raise DuplicateDemand, "A demand named '#{demand.name}' is already present."
       end
 
-      @sources[source.name] = source
-      use_source(source) || install_source(source)
-
-      graph.artifacts(source.name, source.cached_cookbook.version)
-
-      if include_dependencies
-        add_source_dependencies(source)
-      end
-
-      sources
+      demands.push(demand)
     end
 
-    # Add the dependencies of the given source as sources in the collection of sources
-    # on this instance of Resolver. Any dependencies which already have a source in the
-    # collection of sources of the same name will not be added to the collection a second
-    # time.
+    # Add dependencies of a locally cached cookbook which will take precedence over anything
+    # found in the universe.
     #
-    # @param [CookbookSource] source
-    #   source to convert dependencies into sources
+    # @param [Berkshelf::CachedCookbook] cookbook
     #
-    # @return [Array<CookbookSource>]
-    def add_source_dependencies(source)
-      source.cached_cookbook.dependencies.each do |name, constraint|
-        next if has_source?(name)
-
-        add_source(CookbookSource.new(berksfile, name, constraint: constraint))
-      end
+    # @return [Hash]
+    def add_explicit_dependencies(cookbook)
+      graph.populate_local(cookbook)
     end
 
-    # @return [Array<Berkshelf::CookbookSource>]
-    #   an array of CookbookSources that are currently added to this resolver
-    def sources
-      @sources.collect { |name, source| source }
+    # An array of arrays containing the name and constraint of each demand
+    #
+    # @note this is the format that Solve uses to determine a solution for the graph
+    #
+    # @return [Array<String, String>]
+    def demand_array
+      demands.collect { |demand| [ demand.name, demand.version_constraint ] }
     end
 
-    # Finds a solution for the currently added sources and their dependencies and
+    # Finds a solution for the currently added dependencies and their dependencies and
     # returns an array of CachedCookbooks.
     #
-    # @return [Array<Berkshelf::CachedCookbook>]
-    def resolve
-      demands = [].tap do |l_demands|
-        graph.artifacts.each do |artifact|
-          l_demands << [ artifact.name, artifact.version ]
-        end
-      end
-
-      solution = Solve.it!(graph, demands)
-
-      [].tap do |cached_cookbooks|
-        solution.each do |name, version|
-          cached_cookbooks << get_source(name).cached_cookbook
-        end
-      end
-    end
-
-    # @param [CookbookSource, #to_s] source
-    #   name of the source to return
+    # @raise [Berkshelf::NoSolutionError] when a solution could not be found for the given demands
     #
-    # @return [Berkshelf::CookbookSource]
-    def [](source)
-      if source.is_a?(CookbookSource)
-        source = source.name
-      end
-      @sources[source.to_s]
-    end
-    alias_method :get_source, :[]
+    # @return [Array<Array<String, String, Dependency>>]
+    def resolve
+      graph.populate_store
+      graph.populate(berksfile.sources)
 
-    # @param [CoobookSource, #to_s] source
-    #   the source to test if the resolver has added
-    def has_source?(source)
-      !get_source(source).nil?
+      Solve.it!(graph, demand_array, ENV['DEBUG_RESOLVER'] ? { ui: Berkshelf.ui } : {}).collect do |name, version|
+        dependency = get_demand(name) || Dependency.new(berksfile, name, locked_version: version)
+        [ name, version, dependency ]
+      end
+    rescue Solve::Errors::NoSolutionError
+      raise Berkshelf::NoSolutionError.new(demands)
     end
 
-    private
+    # Retrieve the given demand from the resolver
+    #
+    # @param [Berkshelf::Dependency, #to_s] demand
+    #   name of the dependency to return
+    #
+    # @return [Berkshelf::Dependency]
+    def [](demand)
+      name = demand.respond_to?(:name) ? demand.name : demand.to_s
+      demands.find { |demand| demand.name == name }
+    end
+    alias_method :get_demand, :[]
 
-      attr_reader :downloader
-
-      # @param [Berkshelf::CookbookSource] source
-      #
-      # @return [Boolean]
-      def install_source(source)
-        cached_cookbook, location = downloader.download(source)
-        Berkshelf.formatter.install source.name, cached_cookbook.version, location
-      end
-
-      # Use the given source to create a constraint solution if the source has been downloaded or can
-      # be satisfied by a cached cookbook that is already present in the cookbook store.
-      #
-      # @note Git location sources which have not yet been downloaded will not be satisfied by a
-      #   cached cookbook from the cookbook store.
-      #
-      # @param [Berkshelf::CookbookSource] source
-      #
-      # @raise [ConstraintNotSatisfied] if the CachedCookbook does not satisfy the version constraint of
-      #   this instance of Location.
-      #   contain a cookbook that satisfies the given version constraint of this instance of
-      #   CookbookSource.
-      #
-      # @return [Boolean]
-      def use_source(source)
-        if source.downloaded?
-          cached = source.cached_cookbook
-          source.location.validate_cached(cached)
-        else
-          if source.location.is_a?(GitLocation)
-            return false
-          end
-
-          cached = downloader.cookbook_store.satisfy(source.name, source.version_constraint)
-          return false if cached.nil?
-
-          get_source(source).cached_cookbook = cached
-        end
-
-        path = source.location.is_a?(PathLocation) ? "#{source.location}" : nil
-        Berkshelf.formatter.use cached.cookbook_name, cached.version, path
-
-        true
-      end
+    # Check if the given demand has been added to the resolver
+    #
+    # @param [Berkshelf::Dependency, #to_s] demand
+    #   the demand or the name of the demand to check for
+    def has_demand?(demand)
+      !get_demand(demand).nil?
+    end
   end
 end

@@ -1,3 +1,107 @@
+# 3.0.0
+
+* Enhancements
+  * New "universe" resolver which communicates with an API server to resolve constraint graphs faster and more reliably
+  * `berks vendor` will now compile cookbook metadata into the cookbook's vendored directory. The raw metadata will not be included in the vendored cookbook to ensure that Chef Client doesn't (wrongly) prioritize the raw metadata over compiled metadata
+  * `berks vendor` now includes the Berksfile.lock alongside the vendored contents
+  * `berks package` will now simply archive the output of `berks vendor`
+
+* Bug Fixes
+  * Raw metadata will be compiled into metadata.json during vendor process
+
+* Backwards incompatible changes
+  * `berks package` has had it's argument and options list updated. The first argument is now the name, or fulle path, of the archive file that will be generated. As with before, the first argument is not required.
+
+# 2.0.10
+
+* Huge performance increase when resolving a Berksfile when the Berkshelf contains a lot of cookbooks
+
+# 2.0.9
+
+* Update required version of Ridley
+
+# 2.0.8
+
+* Account for API changes to solve
+* Rescue exceptions when parsing the lockfile
+* Fix deprecation errors
+
+# 2.0.7
+
+* Fix crash when parsing a lockfile that contains path locations which no longer exist
+
+# 2.0.6
+
+* Fix installation failures due to latest release of ActiveSupport
+* --except and --only will now work with a lockfile present
+
+# 2.0.5
+
+* Improve speed of resolution when a lockfile is present
+* Gracefully fail when a lockfile is present but empty
+* Fix issue where locked version was not honored if the cookbook store was empty
+
+# 2.0.4
+
+* Fix bug where community cookbooks compressed with bzip2 would not download and install
+* Fix bug regression in Git caching which was previously fixed in 1.4.4
+* Fix validation bug where a cookbook would be considered invalid if any spaces were present in the path to the directory containing the cookbook
+* Fix issues with uploading cookbooks on Windows
+
+# 2.0.3
+
+* Fix issue where groups defined in the Berksfile would not be evaluated
+
+# 2.0.2
+
+* Fix issue with shellout on Windows. This would effect uploads and downloads of cookbooks using the Git location.
+* The Berksfile DSL now evaluates in a clean room to prevent end-users from calling restricted methods.
+* Fix issue with `berks upload -D` not properly skipping dependencies
+* Added friendly error message when an unknown license is chosen during cookbook generation
+
+# 2.0.1
+
+* Improve performance of `berks upload`. It will now properly respect the Lockfile
+* Fix debug/verbose logging
+* You can now specify an alternate configuration with -c once again
+
+# 2.0.0
+
+* Huge improvements to the Lockfile
+  - They actually work!
+  - Now in JSON format
+  - Old lockfiles will automatically be converted to the new format
+* Add `berks shelf` command. Any operations on the already installed cookbooks now reside here
+  - `berks shelf list` to list all cookbooks in the Berkshelf
+  - `berks shelf show` to display information about a specific cookbook in the Berkshelf
+  - `berks shelf uninstall` to remove an installed cookbook from the Berkshelf
+* Add `berks package` command. Will package any cookbooks and dependencies defined in your Berksfile into a tar.
+* Add `berks apply` command. Take the locked constraints of your lockfile and apply them directly to the an environment's locked cookbook versions.
+* Test-Kitchen integration (beta)
+  - Add `berks test` command. This is a delegator to `bin/kitchen`
+  - Berkshelf's Cookbook generators will by default generate Test-Kitchen files for you
+* Remove `berks open` command
+* Rename `berks info` command to `berks show`
+
+# 1.4.4
+
+- Bump Ridley dependency to 0.12, bringing in many bugfixes.
+
+# 1.4.3
+
+- Bump Ridley dependency to 0.11, bringing in many bugfixes.
+
+# 1.4.2
+
+- Fix git caching bug for huge speedups in Berksfiles with lots of git
+  paths. Thanks to @tylerflint and @jasondunsmore.
+
+# 1.4.1
+
+- Berksfile#upload will now honor the given server_url option
+- Add validation to shortnames of 'site' in Berksfile
+- Fix init generator issue by locking to the appropriate version of Rubygems
+
 # 1.4.0
 
 - Add ability to freeze cookbooks. Cookbooks are frozen on upload by default
@@ -10,7 +114,7 @@
 
 # 1.3.1
 - Support for Vagrant 1.1.x
-- Move Berkshelf Vagrant plugin into it's [own repository](https://github.com/RiotGames/berkshelf-vagrant)
+- Move Berkshelf Vagrant plugin into it's [own repository](https://github.com/berkshelf/vagrant-berkshelf)
 - Added -d flag to output debug information in berks command
 - Various bug fixes in uploading cookbooks
 

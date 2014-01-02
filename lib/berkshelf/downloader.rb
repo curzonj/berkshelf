@@ -1,135 +1,94 @@
+require 'net/http'
+require 'zlib'
+require 'archive/tar/minitar'
+
 module Berkshelf
-  # @author Jamie Winsor <reset@riotgames.com>
   class Downloader
     extend Forwardable
 
-    DEFAULT_LOCATIONS = [
-      {
-        type: :site,
-        value: Location::OPSCODE_COMMUNITY_API,
-        options: Hash.new
-      }
-    ]
+    attr_reader :berksfile
 
+    def_delegators :berksfile, :sources
+
+    # @param [Berkshelf::Berksfile] berksfile
+    def initialize(berksfile)
+      @berksfile = berksfile
+    end
+
+    # Download the given Berkshelf::Dependency.
+    #
+    # @param [String] name
+    # @param [String] version
+    #
+    # @option options [String] :path
+    #
+    # @raise [CookbookNotFound]
+    #
     # @return [String]
-    #   a filepath to download cookbook sources to
-    attr_reader :cookbook_store
+    def download(*args)
+      options = args.last.is_a?(Hash) ? args.pop : Hash.new
+      dependency, version = args
 
-    def_delegators :@cookbook_store, :storage_path
-
-    # @option options [Array<Hash>] locations
-    def initialize(cookbook_store, options = {})
-      @cookbook_store = cookbook_store
-      @locations = options.fetch(:locations, Array.new)
-    end
-
-    # @return [Array<Hash>]
-    #   an Array of Hashes representing each default location that can be used to attempt
-    #   to download cookbook sources which do not have an explicit location. An array of default locations will
-    #   be used if no locations are explicitly added by the {#add_location} function.
-    def locations
-      @locations.any? ? @locations : DEFAULT_LOCATIONS
-    end
-
-    # Create a location hash and add it to the end of the array of locations.
-    #
-    # subject.add_location(:chef_api, "http://chef:8080", node_name: "reset", client_key: "/Users/reset/.chef/reset.pem") =>
-    #   [ { type: :chef_api, value: "http://chef:8080/", node_name: "reset", client_key: "/Users/reset/.chef/reset.pem" } ]
-    #
-    # @param [Symbol] type
-    # @param [String, Symbol] value
-    # @param [Hash] options
-    #
-    # @return [Hash]
-    def add_location(type, value, options = {})
-      if has_location?(type, value)
-        raise DuplicateLocationDefined,
-          "A default '#{type}' location with the value '#{value}' is already defined"
-      end
-
-      @locations.push(type: type, value: value, options: options)
-    end
-
-    # Checks the list of default locations if a location of the given type and value has already
-    # been added and returns true or false.
-    #
-    # @return [Boolean]
-    def has_location?(type, value)
-      @locations.select { |loc| loc[:type] == type && loc[:value] == value }.any?
-    end
-
-    # Downloads the given CookbookSource.
-    #
-    # @param [CookbookSource] source
-    #   the source to download
-    #
-    # @return [Array]
-    #   an array containing the downloaded CachedCookbook and the Location used
-    #   to download the cookbook
-    def download(source)
-      cached_cookbook, location = if source.location
-        begin
-          [source.location.download(storage_path), source.location]
-        rescue CookbookValidationFailure; raise
-        rescue
-          Berkshelf.formatter.error "Failed to download '#{source.name}' from #{source.location}"
-          raise
-        end
+      if dependency.is_a?(Berkshelf::Dependency)
+        dependency.download
       else
-        search_locations(source)
-      end
-
-      source.cached_cookbook = cached_cookbook
-
-      [cached_cookbook, location]
-    end
-
-    private
-
-      # Searches locations for a CookbookSource. If the source does not contain a
-      # value for {CookbookSource#location}, the default locations of this
-      # downloader will be used to attempt to retrieve the source.
-      #
-      # @param [CookbookSource] source
-      #   the source to download
-      #
-      # @return [Array]
-      #   an array containing the downloaded CachedCookbook and the Location used
-      #   to download the cookbook
-      def search_locations(source)
-        cached_cookbook = nil
-        location = nil
-
-        locations.each do |loc|
-          location = Location.init(
-            source.name,
-            source.version_constraint,
-            loc[:options].merge(loc[:type] => loc[:value])
-          )
-          begin
-            cached_cookbook = location.download(storage_path)
-            break
-          rescue Berkshelf::CookbookNotFound
-            cached_cookbook, location = nil
-            next
+        sources.each do |source|
+          if result = try_download(source, dependency, version)
+            return result
           end
         end
 
-        if cached_cookbook.nil?
-          raise CookbookNotFound, "Cookbook '#{source.name}' not found in any of the default locations"
+        raise CookbookNotFound, "#{dependency} (#{version}) not found in any sources"
+      end
+    end
+
+    # @param [Berkshelf::Source] source
+    # @param [String] name
+    # @param [String] version
+    #
+    # @return [String]
+    def try_download(source, name, version)
+      unless remote_cookbook = source.cookbook(name, version)
+        return nil
+      end
+
+      case remote_cookbook.location_type
+      when :opscode
+        CommunityREST.new(remote_cookbook.location_path).download(name, version)
+      when :chef_server
+        # @todo Dynamically get credentials for remote_cookbook.location_path
+        credentials = {
+          server_url: remote_cookbook.location_path,
+          client_name: Berkshelf::Config.instance.chef.node_name,
+          client_key: Berkshelf::Config.instance.chef.client_key,
+          ssl: {
+            verify: Berkshelf::Config.instance.ssl.verify
+          }
+        }
+        # @todo  Something scary going on here - getting an instance of Kitchen::Logger from test-kitchen
+        # https://github.com/opscode/test-kitchen/blob/master/lib/kitchen.rb#L99
+        Celluloid.logger = nil unless ENV["DEBUG_CELLULOID"]
+        Ridley.open(credentials) { |r| r.cookbook.download(name, version) }
+      when :github
+        tmp_dir      = Dir.mktmpdir
+        archive_path = File.join(tmp_dir, "#{name}-#{version}.tar.gz")
+        out_dir      = File.join(tmp_dir, "#{name}-#{version}")
+        url          = URI("https://codeload.github.com/#{remote_cookbook.location_path}/tar.gz/v#{version}")
+
+        Net::HTTP.start(url.host, use_ssl: url.scheme == "https") do |http|
+          resp = http.get(url.path)
+          open(archive_path, "wb") { |file| file.write(resp.body) }
         end
 
-        [ cached_cookbook, location ]
-      end
+        tgz = Zlib::GzipReader.new(File.open(archive_path, "rb"))
+        Archive::Tar::Minitar.unpack(tgz, tmp_dir)
 
-
-      # Validates that a source is an instance of CookbookSource
-      #
-      # @param [CookbookSource] source
-      #
-      # @return [Boolean]
-      def validate_source(source)
-        source.is_a?(Berkshelf::CookbookSource)
+        out_dir
+      else
+        raise RuntimeError, "unknown location type #{remote_cookbook.location_type}"
       end
+    rescue CookbookNotFound
+      nil
+    end
   end
 end

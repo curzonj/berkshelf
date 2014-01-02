@@ -8,9 +8,16 @@ module Berkshelf
         ridley.cookbook.all
       end
 
-      def upload_cookbook(path)
+      def upload_cookbook(path, options = {})
         cached = CachedCookbook.from_store_path(path)
-        ridley.cookbook.upload(cached.path, name: cached.cookbook_name)
+
+        options = {
+          force: false,
+          freeze: false,
+          name: cached.cookbook_name,
+        }.merge(options)
+
+        ridley.cookbook.upload(cached.path, options)
       end
 
       # Remove the version of the given cookbook from the Chef Server defined
@@ -24,7 +31,8 @@ module Berkshelf
         else
           ridley.cookbook.delete(name, version)
         end
-      rescue Ridley::Errors::HTTPNotFound
+      rescue Ridley::Errors::HTTPNotFound,
+             Ridley::Errors::ResourceNotFound
         true
       end
 
@@ -36,7 +44,8 @@ module Berkshelf
         else
           !versions.find { |ver| ver == version }.nil?
         end
-      rescue Ridley::Errors::HTTPNotFound
+      rescue Ridley::Errors::HTTPNotFound,
+             Ridley::Errors::ResourceNotFound
         false
       end
 
@@ -48,7 +57,6 @@ module Berkshelf
           "templates/default",
           "files/default",
           "attributes",
-          "definitions",
           "providers",
           "resources"
         ]
@@ -67,10 +75,13 @@ module Berkshelf
           FileUtils.touch(cookbook_path.join(file))
         end
 
-        metadata = <<-EOF
-name "#{name}"
-version "#{version}"
-EOF
+        metadata = [].tap do |a|
+          a << "name     '#{name}'"
+          a << "version  '#{version}'"
+          a << "license  '#{options[:license]}'" if options[:license]
+          a << "" # ensure newline
+        end.join("\n")
+
 
         if options[:dependencies]
           options[:dependencies].each do |name, constraint|
@@ -87,17 +98,33 @@ EOF
         File.open(cookbook_path.join("metadata.rb"), 'w+') do |f|
           f.write metadata
         end
-        
+
         cookbook_path
+      end
+
+      def create_environment(environment_name)
+        ridley.environment.create(name: environment_name)
+      end
+
+      def delete_environment(environment_name)
+        ridley.environment.delete(environment_name)
+      end
+
+      def environment(environment_name)
+        ridley.environment.find(environment_name)
+      end
+
+      def environment_exists?(environment_name)
+        !environment(environment_name).nil?
       end
 
       private
 
         def ridley
           @ridley ||= Ridley.new(
-            server_url: Berkshelf::Chef::Config[:chef_server_url],
-            client_name: Berkshelf::Chef::Config[:node_name],
-            client_key: Berkshelf::Chef::Config[:client_key],
+            server_url: Berkshelf::RSpec::ChefServer.server_url,
+            client_name: Berkshelf.chef_config[:node_name],
+            client_key: Berkshelf.chef_config[:client_key],
             ssl: { verify: false }
           )
         end

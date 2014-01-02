@@ -1,27 +1,53 @@
-World(Berkshelf::RSpec::ChefAPI)
+World(Berkshelf::RSpec::ChefServer)
 
-Given /^the Chef server does not have the cookbooks:$/ do |cookbooks|
+Given(/^the Chef Server is empty$/) do
+  Berkshelf::RSpec::ChefServer.reset!
+end
+
+Given /^the Chef Server has cookbooks:$/ do |cookbooks|
   cookbooks.raw.each do |name, version|
-    purge_cookbook(name, version)
+    chef_cookbook(name, { 'metadata.rb' => "version '#{version}'" })
   end
 end
 
-Given /^the Chef server has cookbooks:$/ do |cookbooks|
+Given /^the Chef Server has frozen cookbooks:$/ do |cookbooks|
   cookbooks.raw.each do |name, version|
-    purge_cookbook(name, version)
-    cb_path = generate_cookbook(tmp_path, name, version)
-    upload_cookbook(cb_path)
+    chef_cookbook(name, { 'metadata.rb' => "version '#{version}'", frozen: true })
   end
 end
 
-Then /^the Chef server should have the cookbooks:$/ do |cookbooks|
-  cookbooks.raw.each do |name, version|
-    server_has_cookbook?(name, version).should be_true
+Given(/^the Chef Server has an environment named "(.*?)"$/) do |name|
+  chef_environment(name, { 'description' => 'This is an environment' })
+end
+
+Given(/^the Chef Server does not have an environment named "(.*?)"$/) do |name|
+  if chef_server.data_store.exists?(['environments', name])
+    chef_server.data_store.delete(['environments', name])
   end
 end
 
-Then /^the Chef server should not have the cookbooks:$/ do |cookbooks|
+Then /^the Chef Server should have the cookbooks:$/ do |cookbooks|
+  list = chef_cookbooks
   cookbooks.raw.each do |name, version|
-    server_has_cookbook?(name, version).should be_false
+    expect(list.keys).to  include(name)
+    expect(list[name]).to include(version) unless version.nil?
+  end
+end
+
+Then /^the Chef Server should not have the cookbooks:$/ do |cookbooks|
+  list = chef_cookbooks
+  cookbooks.raw.each do |name, version|
+    unless version.nil?
+      expect(list.keys).to_not include(name)
+    else
+      expect(list[name] || []).to_not include(version)
+    end
+  end
+end
+
+Then(/^the version locks in the "(.*?)" environment should be:$/) do |name, locks|
+  list = chef_environment_locks(name)
+  locks.raw.each do |cookbook, version|
+    expect(list[cookbook]).to eq(version)
   end
 end

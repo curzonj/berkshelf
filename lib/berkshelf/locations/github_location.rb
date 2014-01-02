@@ -1,5 +1,4 @@
 module Berkshelf
-  # @author Josiah Kiehl <jkiehl@riotgames.com>
   class GithubLocation < GitLocation
     DEFAULT_PROTOCOL = :git
 
@@ -18,8 +17,11 @@ module Berkshelf
     #   the GitHub repo identifier to clone
     # @option options [#to_sym] :protocol
     #   the protocol with which to communicate with GitHub
-    def initialize(name, version_constraint, options = {})
+    def initialize(dependency, options = {})
       @repo_identifier = options.delete(:github)
+      if repo_identifier.end_with?(".git")
+        raise InvalidGitHubIdentifier.new(repo_identifier)
+      end
       @protocol        = (options.delete(:protocol) || DEFAULT_PROTOCOL).to_sym
       options[:git]    = github_url
       super
@@ -42,13 +44,6 @@ module Berkshelf
       else
         raise UnknownGitHubProtocol.new(protocol)
       end
-    end
-
-    def to_s
-      s = "#{self.class.location_key}: '#{repo_identifier}'"
-      s << " with branch: '#{branch}'" if branch
-      s << " over protocol: '#{protocol}'"
-      s
     end
 
     private

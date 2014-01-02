@@ -1,32 +1,17 @@
 module Berkshelf
-  # @author Jamie Winsor <reset@riotgames.com>
-  class GitLocation
-    class << self
-      # Create a temporary directory for the cloned repository within Berkshelf's
-      # temporary directory
-      #
-      # @return [String]
-      #   the path to the created temporary directory
-      def tmpdir
-        @tmpdir ||= Berkshelf.mktmpdir
-      end
-    end
-
-    include Location
-
+  class GitLocation < Location::ScmLocation
     set_location_key :git
     set_valid_options :ref, :branch, :tag, :rel
 
     attr_accessor :uri
     attr_accessor :branch
     attr_accessor :rel
+    attr_accessor :ref
     attr_reader :options
 
-    alias_method :ref, :branch
     alias_method :tag, :branch
 
-    # @param [#to_s] name
-    # @param [Solve::Constraint] version_constraint
+    # @param [Dependency] dependency
     # @param [Hash] options
     #
     # @option options [String] :git
@@ -39,43 +24,62 @@ module Berkshelf
     #   same as tag
     # @option options [String] :rel
     #   the path within the repository to find the cookbook
-    def initialize(name, version_constraint, options = {})
-      @name               = name
-      @version_constraint = version_constraint
-      @uri                = options[:git]
-      @branch             = options[:branch] || options[:ref] || options[:tag]
-      @rel                = options[:rel]
+    def initialize(dependency, options = {})
+      super
+      @uri    = options[:git]
+      @ref    = options[:ref]
+      @branch = options[:branch] || options[:tag] || "master" unless ref
+      @sha    = ref
+      @rel    = options[:rel]
 
       Git.validate_uri!(@uri)
+    end
+
+    # @example
+    #     irb> location.checkout_info
+    #     { kind: "branch", rev: "master" }
+    #
+    # @return [Hash]
+    def checkout_info
+      if @sha
+        kind, rev = "ref", @sha
+      else
+        kind, rev = "branch", branch
+      end
+
+      { kind: kind, rev: rev }
     end
 
     # @param [#to_s] destination
     #
     # @return [Berkshelf::CachedCookbook]
-    def download(destination)
-      return local_revision(destination) if cached?(destination)
+    def do_download
+      destination = Berkshelf::CookbookStore.instance.storage_path
 
-      ::Berkshelf::Git.checkout(clone, branch) if branch
-      unless branch
-        self.branch = ::Berkshelf::Git.rev_parse(clone)
+      if cached?(destination)
+        @ref ||= Berkshelf::Git.rev_parse(revision_path(destination))
+        return local_revision(destination)
       end
 
-      tmp_path = rel ? File.join(clone, rel) : clone
+      repo_path = Berkshelf::Git.clone(uri)
+
+      Berkshelf::Git.checkout(repo_path, ref || checkout_info[:rev])
+      @ref = Berkshelf::Git.rev_parse(repo_path)
+
+      tmp_path = rel ? File.join(repo_path, rel) : repo_path
       unless File.chef_cookbook?(tmp_path)
-        msg = "Cookbook '#{name}' not found at git: #{uri}"
-        msg << " with branch '#{branch}'" if branch
+        msg = "Cookbook '#{dependency.name}' not found at git: #{to_display}"
         msg << " at path '#{rel}'" if rel
         raise CookbookNotFound, msg
       end
 
-      cb_path = File.join(destination, "#{self.name}-#{Git.rev_parse(clone)}")
+      cb_path = revision_path(destination)
       FileUtils.rm_rf(cb_path)
       FileUtils.mv(tmp_path, cb_path)
 
       cached = CachedCookbook.from_store_path(cb_path)
       validate_cached(cached)
 
-      set_downloaded_status(true)
       cached
     end
 
@@ -87,25 +91,16 @@ module Berkshelf
     end
 
     def to_s
-      s = "#{self.class.location_key}: '#{uri}'"
-      s << " with branch: '#{branch}'" if branch
-      s
+      "#{self.class.location_key}: #{to_display}"
     end
 
     private
 
-      def git
-        @git ||= Berkshelf::Git.new(uri)
-      end
-
-      def clone
-        tmp_clone = File.join(self.class.tmpdir, uri.gsub(/[\/:]/,'-'))
-
-        unless File.exists?(tmp_clone)
-          Berkshelf::Git.clone(uri, tmp_clone)
-        end
-
-        tmp_clone
+      def to_display
+        info = checkout_info
+        s = "'#{uri}' with #{info[:kind]}: '#{info[:rev]}'"
+        s << " at ref: '#{ref}'" if ref && (info[:kind] != "ref" || ref != info[:rev])
+        s
       end
 
       def cached?(destination)
@@ -120,8 +115,8 @@ module Berkshelf
       end
 
       def revision_path(destination)
-        return unless branch
-        File.join(destination, "#{name}-#{branch}")
+        return unless ref
+        File.join(destination, "#{dependency.name}-#{ref}")
       end
   end
 end

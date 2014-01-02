@@ -2,6 +2,7 @@ require 'aruba/api'
 
 World(Aruba::Api)
 World(Berkshelf::RSpec::ChefAPI)
+World(Berkshelf::RSpec::FileSystemMatchers)
 
 Given /^a cookbook named "(.*?)"$/ do |name|
   steps %{
@@ -10,45 +11,40 @@ Given /^a cookbook named "(.*?)"$/ do |name|
   }
 end
 
-Given /^I do not have a Berksfile$/ do
-  in_current_dir { FileUtils.rm_f(Berkshelf::DEFAULT_FILENAME) }
-end
-
-Given /^I do not have a Berksfile\.lock$/ do
-  in_current_dir { FileUtils.rm_f(Berkshelf::Lockfile::DEFAULT_FILENAME) }
-end
-
-Given /^I have a default Berkshelf config file$/ do
-  Berkshelf::Config.new.save
-end
-
-Given /^I have a Berkshelf config file containing:$/ do |contents|
-  ::File.open(Berkshelf::Config.path, 'w+') do |f|
-    f.write(contents)
-  end
-end
-
-Given /^I do not have a Berkshelf config file$/ do
-  remove_file Berkshelf::Config.path if ::File.exists? Berkshelf::Config.path
-end
-
 Given /^the cookbook "(.*?)" has the file "(.*?)" with:$/ do |cookbook_name, file_name, content|
   write_file(::File.join(cookbook_name, file_name), content)
 end
 
 Given /^the cookbook store has the cookbooks:$/ do |cookbooks|
-  cookbooks.raw.each do |name, version|
-    generate_cookbook(cookbook_store, name, version)
+  cookbooks.raw.each do |name, version, license|
+    generate_cookbook(cookbook_store.storage_path, name, version, license: license)
+  end
+end
+
+Given /^the cookbook store has the git cookbooks:$/ do |cookbooks|
+  cookbooks.raw.each do |name, version, sha|
+    folder   = "#{name}-#{sha}"
+    metadata = File.join(folder, 'metadata.rb')
+
+    create_dir(folder)
+    write_file(metadata, [
+      "name '#{name}'",
+      "version '#{version}'"
+    ].join("\n"))
   end
 end
 
 Given /^the cookbook store contains a cookbook "(.*?)" "(.*?)" with dependencies:$/ do |name, version, dependencies|
-  generate_cookbook(cookbook_store, name, version, dependencies: dependencies.raw)
+  generate_cookbook(cookbook_store.storage_path, name, version, dependencies: dependencies.raw)
+end
+
+Given(/^the cookbook store is empty$/) do
+  Berkshelf::CookbookStore.instance.clean!
 end
 
 Then /^the cookbook store should have the cookbooks:$/ do |cookbooks|
   cookbooks.raw.each do |name, version|
-    cookbook_store.should have_structure {
+    expect(cookbook_store.storage_path).to have_structure {
       directory "#{name}-#{version}" do
         file "metadata.rb" do
           contains version
@@ -60,7 +56,7 @@ end
 
 Then /^the cookbook store should have the git cookbooks:$/ do |cookbooks|
   cookbooks.raw.each do |name, version, sha1|
-    cookbook_store.should have_structure {
+    expect(cookbook_store.storage_path).to have_structure {
       directory "#{name}-#{sha1}" do
         file "metadata.rb" do
           contains version
@@ -72,21 +68,16 @@ end
 
 Then /^the cookbook store should not have the cookbooks:$/ do |cookbooks|
   cookbooks.raw.each do |name, version|
-    cookbook_store.should_not have_structure {
+    expect(cookbook_store.storage_path).to_not have_structure {
       directory "#{name}-#{version}"
     }
   end
 end
 
-Then /^I should have the cookbook "(.*?)"$/ do |name|
-  Pathname.new(current_dir).join(name).should be_cookbook
-end
-
 Then /^I should have a new cookbook skeleton "(.*?)"$/ do |name|
   cb_path = Pathname.new(current_dir).join(name)
-  cb_path.should have_structure {
+  expect(cb_path).to have_structure {
     directory "attributes"
-    directory "definitions"
     directory "files" do
       directory "default"
     end
@@ -119,9 +110,9 @@ Then /^I should have a new cookbook skeleton "(.*?)" with Chef-Minitest support$
   steps %Q{ Then I should have a new cookbook skeleton "#{name}" }
 
   cb_path = Pathname.new(current_dir).join(name)
-  cb_path.should have_structure {
+  expect(cb_path).to have_structure {
     file "Berksfile" do
-      contains "cookbook \"minitest-handler\""
+      contains "cookbook 'minitest-handler'"
     end
     file "Vagrantfile" do
       contains "recipe[minitest-handler::default]"
@@ -151,7 +142,7 @@ Then /^I should have a new cookbook skeleton "(.*?)" with Foodcritic support$/ d
   steps %Q{ Then I should have a new cookbook skeleton "#{name}" }
 
   cb_path = Pathname.new(current_dir).join(name)
-  cb_path.should have_structure {
+  expect(cb_path).to have_structure {
     file "Gemfile" do
       contains "gem 'thor-foodcritic'"
     end
@@ -165,7 +156,7 @@ Then /^I should have a new cookbook skeleton "(.*?)" with SCMVersion support$/ d
   steps %Q{ Then I should have a new cookbook skeleton "#{name}" }
 
   cb_path = Pathname.new(current_dir).join(name)
-  cb_path.should have_structure {
+  expect(cb_path).to have_structure {
     file "Gemfile" do
       contains "gem 'thor-scmversion'"
     end
@@ -177,9 +168,8 @@ end
 
 Then /^I should have a new cookbook skeleton "(.*?)" with no Bundler support$/ do |name|
   cb_path = Pathname.new(current_dir).join(name)
-  cb_path.should have_structure {
+  expect(cb_path).to have_structure {
     directory "attributes"
-    directory "definitions"
     directory "files" do
       directory "default"
     end
@@ -204,17 +194,27 @@ Then /^I should have a new cookbook skeleton "(.*?)" with no Bundler support$/ d
 end
 
 Then /^I should have a new cookbook skeleton "(.*?)" with no Git support$/ do |name|
-  Pathname.new(current_dir).join(name).should have_structure {
+  expect(Pathname.new(current_dir).join(name)).to have_structure {
     no_file ".gitignore"
   }
 end
 
 Then /^I should have a new cookbook skeleton "(.*?)" with no Vagrant support$/ do |name|
-  Pathname.new(current_dir).join(name).should have_structure {
+  expect(Pathname.new(current_dir).join(name)).to have_structure {
     file "Gemfile" do
       does_not_contain "gem 'vagrant'"
     end
     no_file "Vagrantfile"
+  }
+end
+
+Then(/^I should have a new cookbook skeleton "(.*?)" with no Test Kitchen support$/) do |name|
+  expect(Pathname.new(current_dir).join(name)).to have_structure {
+    file "Gemfile" do
+      does_not_contain "gem 'test-kitchen'"
+    end
+    no_file ".kitchen.yml"
+    no_file ".kitchen.yml.local"
   }
 end
 
@@ -227,7 +227,7 @@ Then /^the cookbook "(.*?)" should not have the following files:$/ do |name, fil
 end
 
 Then /^the file "(.*?)" in the cookbook "(.*?)" should contain:$/ do |file_name, cookbook_name, content|
-  Pathname.new(current_dir).join(cookbook_name).should have_structure {
+  expect(Pathname.new(current_dir).join(cookbook_name)).to have_structure {
     file "Berksfile" do
       contains content
     end
@@ -236,7 +236,7 @@ Then /^the file "(.*?)" in the cookbook "(.*?)" should contain:$/ do |file_name,
 end
 
 Then /^the resulting "(.+)" Vagrantfile should contain:$/ do |cookbook_name, content|
-  Pathname.new(current_dir).join(cookbook_name).should have_structure {
+  expect(Pathname.new(current_dir).join(cookbook_name)).to have_structure {
     file "Vagrantfile" do
       content.respond_to?(:raw) ?
         content.raw.flatten.each { |string| contains string } :
@@ -261,10 +261,9 @@ Then /^the file "(.*?)" in the directory "(.*?)" should not contain:$/ do |file_
   }
 end
 
-Then /^the current directory should have the following files:$/ do |files|
-  check_file_presence(files.raw.map{|file_row| file_row[0]}, true)
-end
-
-Then /^the current directory should not have the following files:$/ do |files|
-  check_file_presence(files.raw.map{|file_row| file_row[0]}, false)
+Then(/^the directory "(.*?)" should contain version "(.*?)" of the "(.*?)" cookbook$/) do |path, version, name|
+  cookbook_path = File.join(current_dir, path)
+  cookbook = Berkshelf::CachedCookbook.from_path(cookbook_path)
+  expect(cookbook.version).to eql(version)
+  expect(cookbook.cookbook_name).to eql(name)
 end

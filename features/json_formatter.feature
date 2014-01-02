@@ -1,45 +1,156 @@
 Feature: --format json
-  As a user
-  I want to be able to get all output in JSON format
-  So I can easily parse the output in scripts
+  Background:
+    * the Berkshelf API server's cache is empty
+    * the Chef Server is empty
+    * the cookbook store is empty
 
   Scenario: JSON output installing a cookbook from the default location
-    Given I write to "Berksfile" with:
+    Given I have a Berksfile pointing at the local Berkshelf API with:
       """
-      cookbook "mysql", "= 1.2.4"
+      cookbook 'berkshelf', '1.0.0'
       """
-    When I run the install command with flags:
-      | --format json |
-    Then the output should be JSON
-    And the JSON at "cookbooks" should have 2 cookbooks
-    And the JSON at "cookbooks/0/version" should be "1.2.4"
-    And the JSON at "cookbooks/0/location" should be "site: 'http://cookbooks.opscode.com/api/v1/cookbooks'"
+    And the Chef Server has cookbooks:
+      | berkshelf | 1.0.0 |
+    And the Berkshelf API server's cache is up to date
+    When I successfully run `berks install --format json`
+    Then the output should contain JSON:
+      """
+      {
+        "cookbooks": [
+          {
+            "api_source": "http://0.0.0.0:26210",
+            "location_path": "http://localhost:26310/",
+            "version": "1.0.0",
+            "name": "berkshelf"
+          }
+        ],
+        "errors": [
+
+        ],
+        "messages": [
+          "building universe..."
+        ]
+      }
+      """
 
   Scenario: JSON output installing a cookbook we already have
     Given the cookbook store has the cookbooks:
-      | mysql   | 1.2.4 |
-    And I write to "Berksfile" with:
+      | berkshelf-cookbook-fixture   | 1.0.0 |
+    And I have a Berksfile pointing at the local Berkshelf API with:
       """
-      cookbook "mysql", "= 1.2.4"
+      cookbook 'berkshelf-cookbook-fixture', '1.0.0'
       """
-    When I run the install command with flags:
-      | --format json |
-    Then the output should be JSON
-    And the JSON at "cookbooks" should have 1 cookbook
-    And the JSON at "cookbooks/0/version" should be "1.2.4"
-    And the JSON should not have "cookbooks/0/location"
+    When I successfully run `berks install --format json`
+    Then the output should contain JSON:
+      """
+      {
+        "cookbooks": [
+          {
+            "name": "berkshelf-cookbook-fixture",
+            "version": "1.0.0"
+          }
+        ],
+        "errors": [
 
-  @chef_server
+        ],
+        "messages": [
+          "building universe..."
+        ]
+      }
+      """
+
+  Scenario: JSON output when running the show command
+    Given the cookbook store has the cookbooks:
+      | fake | 1.0.0 |
+    And I have a Berksfile pointing at the local Berkshelf API with:
+      """
+      cookbook 'fake', '1.0.0'
+      """
+    And the Lockfile has:
+      | fake | 1.0.0 |
+    When I successfully run `berks show fake --format json`
+    Then the output should contain JSON:
+      """
+      {
+        "cookbooks": [
+          {
+            "name": "fake",
+            "version": "1.0.0",
+            "description": "A fabulous new cookbook",
+            "author": "YOUR_COMPANY_NAME",
+            "email": "YOUR_EMAIL",
+            "license": "none"
+          }
+        ],
+        "errors": [
+
+        ],
+        "messages": [
+        ]
+      }
+      """
+
   Scenario: JSON output when running the upload command
-    Given a Berksfile with path location sources to fixtures:
-      | example_cookbook | example_cookbook-0.5.0 |
-    And the Chef server does not have the cookbooks:
-      | example_cookbook | 0.5.0 |
-    When I run the upload command with flags:
-      | --format json |
-    Then the output should be JSON
-    And the JSON at "cookbooks" should have 1 cookbook
-    And the JSON at "cookbooks/0/version" should be "0.5.0"
-    And the JSON should have "cookbooks/0/uploaded_to"
-    And the Chef server should have the cookbooks:
-      | example_cookbook | 0.5.0 |
+    Given I have a Berksfile pointing at the local Berkshelf API with:
+      """
+      cookbook 'example_cookbook', path: '../../fixtures/cookbooks/example_cookbook-0.5.0'
+      """
+    When I successfully run `berks upload --format json`
+    Then the output should contain JSON:
+      """
+      {
+        "cookbooks": [
+          {
+            "name": "example_cookbook",
+            "version": "0.5.0",
+            "location": "../../fixtures/cookbooks/example_cookbook-0.5.0",
+            "uploaded_to": "http://localhost:26310/"
+          }
+        ],
+        "errors": [
+
+        ],
+        "messages": [
+          "building universe..."
+        ]
+      }
+      """
+
+  Scenario: JSON output when running the outdated command
+    Given the cookbook store has the cookbooks:
+      | seth | 0.1.0 |
+    And the Chef Server has cookbooks:
+      | seth | 0.1.0 |
+      | seth | 0.2.9 |
+      | seth | 1.0.0 |
+    And the Berkshelf API server's cache is up to date
+    And I have a Berksfile pointing at the local Berkshelf API with:
+      """
+      cookbook 'seth', '~> 0.1'
+      """
+    And the Lockfile has:
+      | seth | 0.1.0 |
+    And I successfully run `berks outdated --format json`
+    Then the output should contain JSON:
+      """
+      {
+        "cookbooks": [
+          {
+            "version": "0.2.9",
+            "sources": {
+              "http://0.0.0.0:26210": {
+                "name": "seth",
+                "version": "0.2.9"
+              }
+            },
+            "name": "seth"
+          }
+        ],
+        "errors": [
+
+        ],
+        "messages": [
+          "The following cookbooks have newer versions:"
+        ]
+      }
+      """

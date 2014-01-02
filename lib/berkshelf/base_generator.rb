@@ -1,11 +1,10 @@
 require 'thor/group'
 
 module Berkshelf
-  # @author Jamie Winsor <reset@riotgames.com>
   class BaseGenerator < Thor::Group
     class << self
       def source_root
-        Berkshelf.root.join("generator_files")
+        Berkshelf.root.join('generator_files')
       end
     end
 
@@ -18,7 +17,7 @@ module Berkshelf
     include Thor::Actions
 
     private
-    
+
       def target
         @target ||= Pathname.new(File.expand_path(path))
       end

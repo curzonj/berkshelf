@@ -1,133 +1,125 @@
 require 'spec_helper'
 
 describe Berkshelf::GitLocation do
-  let(:complacent_constraint) { double('comp-vconstraint', satisfies?: true) }
+  let(:constraint) { double('comp-vconstraint', satisfies?: true) }
+  let(:dependency) { double('dep', name: "berkshelf-cookbook-fixture", version_constraint: constraint) }
 
   describe "ClassMethods" do
-    subject { described_class }
-
-    describe "::initialize" do
-      it "raises InvalidGitURI if given an invalid Git URI for options[:git]" do
-        lambda {
-          subject.new("nginx", complacent_constraint, git: "/something/on/disk")
-        }.should raise_error(Berkshelf::InvalidGitURI)
-      end
-    end
-
-    describe "::tmpdir" do
-      it "creates a temporary directory within the Berkshelf temporary directory" do
-        subject.tmpdir.should include(Berkshelf.tmp_dir)
+    describe "::new" do
+      it 'raises InvalidGitURI if given an invalid Git URI for options[:git]' do
+        expect {
+          described_class.new(dependency, git: '/something/on/disk')
+        }.to raise_error(Berkshelf::InvalidGitURI)
       end
     end
   end
 
-  subject { described_class.new("nginx", complacent_constraint, git: "git://github.com/opscode-cookbooks/nginx.git") }
+  let(:storage_path) { Berkshelf::CookbookStore.instance.storage_path }
+  subject { described_class.new(dependency, git: 'git://github.com/RiotGames/berkshelf-cookbook-fixture.git') }
 
-  describe "#download" do
-    context "when a local revision is present" do
+  describe '#download' do
+    context 'when a local revision is present' do
       let(:cached) { double('cached') }
 
       before do
-        Berkshelf::GitLocation.any_instance.stub(:cached?).and_return(true)
-        Berkshelf::GitLocation.any_instance.stub(:validate_cached).with(cached).and_return(cached)
+        Berkshelf::Git.stub(:rev_parse).and_return('abcd1234')
+        described_class.any_instance.stub(:cached?).and_return(true)
+        described_class.any_instance.stub(:validate_cached).with(cached).and_return(cached)
         Berkshelf::CachedCookbook.stub(:from_store_path).with(any_args()).and_return(cached)
       end
 
-      it "returns the cached cookbook" do
-        expect(subject.download(tmp_path)).to eq(cached)
+      it 'returns the cached cookbook' do
+        expect(subject.download).to eq(cached)
       end
     end
 
-    it "returns an instance of Berkshelf::CachedCookbook" do
-      subject.download(tmp_path).should be_a(Berkshelf::CachedCookbook)
+    it 'returns an instance of Berkshelf::CachedCookbook' do
+      expect(subject.download).to be_a(Berkshelf::CachedCookbook)
     end
 
-    it "downloads the cookbook to the given destination" do
-      cached_cookbook = subject.download(tmp_path)
+    it 'downloads the cookbook to the given destination' do
+      cached_cookbook = subject.download
+      ref = subject.ref
 
-      tmp_path.should have_structure {
-        directory "#{cached_cookbook.cookbook_name}-#{Berkshelf::Git.rev_parse(cached_cookbook.path)}" do
-          file "metadata.rb"
+      expect(storage_path).to have_structure {
+        directory "#{cached_cookbook.cookbook_name}-#{ref}" do
+          file 'metadata.rb'
         end
       }
     end
 
-    it "sets the downloaded status to true" do
-      subject.download(tmp_path)
+    context 'given no ref/branch/tag options is given' do
+      subject { described_class.new(dependency, git: 'git://github.com/RiotGames/berkshelf-cookbook-fixture.git') }
 
-      subject.should be_downloaded
-    end
-
-    context "given no ref/branch/tag options is given" do
-      subject { described_class.new("nginx", complacent_constraint, git: "git://github.com/opscode-cookbooks/nginx.git") }
-
-      it "sets the branch attribute to the HEAD revision of the cloned repo" do
-        subject.download(tmp_path)
-
-        subject.branch.should_not be_nil
+      it 'sets the branch attribute to the HEAD revision of the cloned repo' do
+        subject.download
+        expect(subject.branch).to_not be_nil
       end
     end
 
-    context "given a git repo that does not exist" do
-      subject { described_class.new("doesnot_exist", complacent_constraint, git: "git://github.com/RiotGames/thisrepo_does_not_exist.git") }
+    context 'given a git repo that does not exist' do
+      before { dependency.stub(name: "doesnot_exist") }
+      subject { described_class.new(dependency, git: 'git://github.com/RiotGames/thisrepo_does_not_exist.git') }
 
-      it "raises a GitError" do
+      it 'raises a GitError' do
         Berkshelf::Git.stub(:git).and_raise(Berkshelf::GitError.new(''))
-        lambda {
-          subject.download(tmp_path)
-        }.should raise_error(Berkshelf::GitError)
+        expect { subject.download }.to raise_error(Berkshelf::GitError)
       end
     end
 
-    context "given a git repo that does not contain a cookbook" do
-      let(:fake_remote) { local_git_origin_path_for('not_a_cookbook') }
-      subject { described_class.new("doesnot_exist", complacent_constraint, git: "file://#{fake_remote}.git") }
+    context 'given a git repo that does not contain a cookbook' do
+      let(:fake_remote) { remote_path('not_a_cookbook') }
+      before { dependency.stub(name: "doesnot_exist") }
+      subject { described_class.new(dependency, git: "file://#{fake_remote}.git") }
 
-      it "raises a CookbookNotFound error" do
-        subject.stub(:clone).and_return {
+      it 'raises a CookbookNotFound error' do
+        Berkshelf::Git.stub(:clone).and_return {
           FileUtils.mkdir_p(fake_remote)
-          Dir.chdir(fake_remote) { |dir| `git init; echo hi > README; git add README; git commit README -m "README"`; dir }
+          Dir.chdir(fake_remote) { |dir| `git init && echo hi > README && git add README && git commit README -m 'README'`; dir }
         }
 
-        lambda {
-          subject.download(tmp_path)
-        }.should raise_error(Berkshelf::CookbookNotFound)
+        expect { subject.download }.to raise_error(Berkshelf::CookbookNotFound)
       end
     end
 
-    context "given the content at the Git repo does not satisfy the version constraint" do
-      subject do
-        described_class.new("nginx",
-          double('constraint', satisfies?: false),
-          git: "git://github.com/opscode-cookbooks/nginx.git"
-        )
-      end
+    context 'given the content at the Git repo does not satisfy the version constraint' do
+      before { constraint.stub(satisfies?: false) }
+      subject { described_class.new(dependency, git: 'git://github.com/RiotGames/berkshelf-cookbook-fixture.git') }
 
-      it "raises a CookbookValidationFailure error" do
-        lambda {
-          subject.download(tmp_path)
-        }.should raise_error(Berkshelf::CookbookValidationFailure)
+      it 'raises a CookbookValidationFailure error' do
+        expect { subject.download }.to raise_error(Berkshelf::CookbookValidationFailure)
       end
     end
 
-    context "given a value for ref that is a tag or branch and not a commit hash" do
-      let(:ref) { "0.9.8" }
+    context 'given a value for tag' do
+      let(:tag) { 'v1.0.0' }
 
       subject do
-        described_class.new("nginx",
-          complacent_constraint,
-          git: "git://github.com/opscode-cookbooks/nginx.git",
-          ref: ref
-        )
+        described_class.new(dependency, git: 'git://github.com/RiotGames/berkshelf-cookbook-fixture.git', tag: tag)
       end
-      let(:cached_cookbook) { subject.download(tmp_path) }
-      let(:commit_hash) { "d7be334b094f497f5cce4169a8b3012bf7b27bc3" }
-      let(:expected_path) { tmp_path.join("#{cached_cookbook.cookbook_name}-#{commit_hash}") }
 
-      before(:each) { Berkshelf::Git.should_receive(:rev_parse).and_return(commit_hash) }
+      let(:cached) { subject.download }
+      let(:sha) { subject.ref }
+      let(:expected_path) { storage_path.join("#{cached.cookbook_name}-#{sha}") }
 
-      it "returns a cached cookbook with a path that contains the commit hash it is pointing to" do
-        cached_cookbook.path.should eql(expected_path)
+      it 'returns a cached cookbook with a path that contains the ref' do
+        expect(cached.path).to eq(expected_path)
+      end
+    end
+
+    context 'give a value for branch' do
+      let(:branch) { 'master' }
+
+      subject do
+        described_class.new(dependency, git: 'git://github.com/RiotGames/berkshelf-cookbook-fixture.git',
+          branch: branch)
+      end
+      let(:cached) { subject.download }
+      let(:sha) { subject.ref }
+      let(:expected_path) { storage_path.join("#{cached.cookbook_name}-#{sha}") }
+
+      it 'returns a cached cookbook with a path that contains the ref' do
+        expect(cached.path).to eq(expected_path)
       end
     end
   end

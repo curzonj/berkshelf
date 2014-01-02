@@ -1,9 +1,7 @@
 require 'open-uri'
 require 'retryable'
-require 'addressable/uri'
 
 module Berkshelf
-  # @author Jamie Winsor <reset@riotgames.com>
   class CommunityREST < Faraday::Connection
     class << self
       # @param [String] target
@@ -17,6 +15,8 @@ module Berkshelf
           Archive::Tar::Minitar.unpack(Zlib::GzipReader.new(File.open(target, 'rb')), destination)
         elsif is_tar_file(target)
           Archive::Tar::Minitar.unpack(target, destination)
+        else
+          raise Berkshelf::UnknownCompressionType.new(target)
         end
         destination
       end
@@ -36,6 +36,7 @@ module Berkshelf
       end
 
       private
+
         def is_gzip_file(path)
           # You cannot write "\x1F\x8B" because the default encoding of
           # ruby >= 1.9.3 is UTF-8 and 8B is an invalid in UTF-8.
@@ -43,11 +44,11 @@ module Berkshelf
         end
 
         def is_tar_file(path)
-          IO.binread(path, 8, 257) == "ustar  \0"
+          IO.binread(path, 8, 257).to_s == "ustar\x0000"
         end
     end
 
-    V1_API = 'http://cookbooks.opscode.com/api/v1/cookbooks'.freeze
+    V1_API = 'https://cookbooks.opscode.com/api/v1'.freeze
 
     # @return [String]
     attr_reader :api_uri
@@ -67,12 +68,13 @@ module Berkshelf
     #   how often we should pause between retries
     def initialize(uri = V1_API, options = {})
       options         = options.reverse_merge(retries: 5, retry_interval: 0.5)
-      @api_uri        = Addressable::URI.parse(uri)
+      @api_uri        = uri
       @retries        = options[:retries]
       @retry_interval = options[:retry_interval]
 
-      builder = Faraday::Builder.new do |b|
-        b.response :json
+      options[:builder] ||= Faraday::Builder.new do |b|
+        b.response :parse_json
+        b.response :gzip
         b.request :retry,
           max: @retries,
           interval: @retry_interval,
@@ -81,7 +83,7 @@ module Berkshelf
         b.adapter :net_http
       end
 
-      super(api_uri, builder: builder)
+      super(api_uri, options)
     end
 
     # @param [String] name
@@ -89,30 +91,31 @@ module Berkshelf
     #
     # @return [String]
     def download(name, version)
-      archive = stream(find(name, version)[:file])
-      self.class.unpack(archive.path)
+      archive   = stream(find(name, version)[:file])
+      extracted = self.class.unpack(archive.path)
+      Dir.glob(File.join(extracted, "*")).first
     ensure
       archive.unlink unless archive.nil?
     end
 
     def find(name, version)
-      response = get("#{name}/versions/#{self.class.uri_escape_version(version)}")
+      response = get("cookbooks/#{name}/versions/#{self.class.uri_escape_version(version)}")
 
       case response.status
       when (200..299)
         response.body
       when 404
-        raise CookbookNotFound, "Cookbook '#{name}' not found at site: '#{api_uri}'"
+        raise CookbookNotFound, "Cookbook '#{name}' (#{version}) not found at site: '#{api_uri}'"
       else
         raise CommunitySiteError, "Error finding cookbook '#{name}' (#{version}) at site: '#{api_uri}'"
       end
     end
 
-    # Returns the latest version of the cookbook and it's download link.
+    # Returns the latest version of the cookbook and its download link.
     #
     # @return [String]
     def latest_version(name)
-      response = get(name)
+      response = get("cookbooks/#{name}")
 
       case response.status
       when (200..299)
@@ -128,7 +131,7 @@ module Berkshelf
     #
     # @return [Array]
     def versions(name)
-      response = get(name)
+      response = get("cookbooks/#{name}")
 
       case response.status
       when (200..299)
@@ -163,7 +166,7 @@ module Berkshelf
       local.binmode
 
       retryable(tries: retries, on: OpenURI::HTTPError, sleep: retry_interval) do
-        open(target, 'rb', headers) do |remote|
+        open(target, 'rb', open_uri_options) do |remote|
           local.write(remote.read)
         end
       end
@@ -172,5 +175,21 @@ module Berkshelf
     ensure
       local.close(false) unless local.nil?
     end
+
+    private
+
+      def open_uri_options
+        options = {}
+        options.merge!(headers)
+        options.merge!(open_uri_proxy_options)
+      end
+
+      def open_uri_proxy_options
+        if proxy && proxy[:user] && proxy[:password]
+          {proxy_http_basic_authentication: [ proxy[:uri], proxy[:user], proxy[:password] ]}
+        else
+          {}
+        end
+      end
   end
 end

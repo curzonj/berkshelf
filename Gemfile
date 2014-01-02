@@ -2,16 +2,13 @@ source 'https://rubygems.org'
 
 gemspec
 
-group :development do
-  gem 'coolline'
-  gem 'guard', '>= 1.5.0'
-  gem 'guard-cane'
+group :guard do
+  gem 'coolline',      '~> 0.4.2'
+  gem 'guard',         '~> 1.8'
   gem 'guard-cucumber'
   gem 'guard-rspec'
   gem 'guard-spork'
   gem 'guard-yard'
-  gem 'redcarpet'
-  gem 'yard'
 
   require 'rbconfig'
 
@@ -35,10 +32,5 @@ group :development do
 end
 
 group :test do
-  gem 'fuubar'
-  gem 'json_spec'
-  gem 'rake', '>= 0.9.2.2'
-  gem 'rspec'
-  gem 'thor'
-  gem 'webmock'
+  gem 'berkshelf-api', github: "berkshelf/berkshelf-api"
 end

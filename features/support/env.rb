@@ -1,77 +1,79 @@
-ENV['RUBY_ENV'] == 'test'
-
-require 'rubygems'
-require 'bundler'
 require 'spork'
-require "json_spec/cucumber"
+
+def windows?
+  !!(RUBY_PLATFORM =~ /mswin|mingw|windows/)
+end
 
 Spork.prefork do
-  require 'rspec'
-  require 'pp'
   require 'aruba/cucumber'
+  require 'aruba/in_process'
+  require 'aruba/spawn_process'
+  require 'cucumber/rspec/doubles'
+  require 'berkshelf/api/rspec' unless windows?
+  require 'berkshelf/api/cucumber' unless windows?
 
-  APP_ROOT = File.expand_path('../../../', __FILE__)
+  Dir['spec/support/**/*.rb'].each { |f| require File.expand_path(f) }
 
-  ENV["BERKSHELF_PATH"] = File.join(APP_ROOT, "tmp", "berkshelf")
-  ENV["BERKSHELF_CHEF_CONFIG"] = File.join(APP_ROOT, "spec", "knife.rb")
+  World(Berkshelf::RSpec::PathHelpers)
+  World(Berkshelf::RSpec::Kitchen)
 
-  # Workaround for RSA Fingerprint prompt in Travis CI
-  git_ssh_path = '/tmp/git_ssh.sh'
-  unless File.exist? git_ssh_path
-    git_ssh = File.new(git_ssh_path, 'w+')
-    git_ssh.puts "ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no $1 $2"
-    git_ssh.chmod 0775
-    git_ssh.flush
-    git_ssh.close
+  CHEF_SERVER_PORT = 26310
+  BERKS_API_PORT   = 26210
+
+  at_exit do
+    Berkshelf::RSpec::ChefServer.stop
+    Berkshelf::API::RSpec::Server.stop unless windows?
   end
 
-  ENV["GIT_SSH"] = git_ssh_path
-
-  Dir[File.join(APP_ROOT, "spec/support/**/*.rb")].each {|f| require f}
-
-  World(Berkshelf::TestGenerators)
-
   Before do
-    clean_cookbook_store
-    generate_berks_config(File.join(ENV["BERKSHELF_PATH"], 'config.json'))
-    @aruba_io_wait_seconds = 5
-    @aruba_timeout_seconds = 16
+    # Legacy ENV variables until we can move over to all InProcess
+    ENV['BERKSHELF_PATH'] = berkshelf_path.to_s
+    ENV['BERKSHELF_CONFIG'] = Berkshelf.config.path.to_s
+    ENV['BERKSHELF_CHEF_CONFIG'] = chef_config_path.to_s
+
+    Aruba::InProcess.main_class = Berkshelf::Cli::Runner
+    Aruba.process               = Aruba::InProcess
+    @dirs                       = ["spec/tmp/aruba"] # set aruba's temporary directory
+
+    stub_kitchen!
+    clean_tmp_path
+    Berkshelf.initialize_filesystem
+    Berkshelf::CookbookStore.instance.initialize_filesystem
+    reload_configs
+    Berkshelf::CachedCookbook.instance_variable_set(:@loaded_cookbooks, nil)
+
+    endpoints = [
+      {
+        type: "chef_server",
+        options: {
+          url: "http://localhost:#{CHEF_SERVER_PORT}",
+          client_name: "reset",
+          client_key: File.expand_path("spec/config/berkshelf.pem")
+        }
+      }
+    ]
+
+    Berkshelf::RSpec::ChefServer.start(port: CHEF_SERVER_PORT)
+    Berkshelf::API::RSpec::Server.start(port: BERKS_API_PORT, endpoints: endpoints) unless windows?
+
+    @aruba_io_wait_seconds = Cucumber::JRUBY ? 7 : 5
+    @aruba_timeout_seconds = Cucumber::JRUBY ? 35 : 15
+  end
+
+  Before('@spawn') do
+    Aruba.process = Aruba::SpawnProcess
+
+    set_env('BERKSHELF_PATH', berkshelf_path.to_s)
+    set_env('BERKSHELF_CONFIG', Berkshelf.config.path.to_s)
+    set_env('BERKSHELF_CHEF_CONFIG', chef_config_path.to_s)
   end
 
   Before('@slow_process') do
-    @aruba_timeout_seconds = 60
-    @aruba_io_wait_seconds = 10
-  end
-
-  def cookbook_store
-    Pathname.new(File.join(ENV["BERKSHELF_PATH"], "cookbooks"))
-  end
-
-  def clean_cookbook_store
-    FileUtils.rm_rf(cookbook_store)
-    FileUtils.mkdir_p(cookbook_store)
-  end
-
-  def app_root_path
-    Pathname.new(APP_ROOT)
-  end
-
-  def tmp_path
-    app_root_path.join('spec/tmp')
-  end
-
-  def fixtures_path
-    app_root_path.join('spec/fixtures')
-  end
-
-  # Set the output json_spec will parse for testing JSON responses
-  def last_json
-    all_output
+    @aruba_io_wait_seconds = Cucumber::JRUBY ? 70 : 30
+    @aruba_timeout_seconds = Cucumber::JRUBY ? 140 : 60
   end
 end
 
 Spork.each_run do
-  Berkshelf::RSpec::Knife.load_knife_config(File.join(APP_ROOT, 'spec/knife.rb'))
-
-  require 'berkshelf'
+  require 'berkshelf/cli'
 end

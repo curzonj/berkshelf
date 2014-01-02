@@ -1,6 +1,8 @@
+begin
+  require 'kitchen/generator/init'
+rescue LoadError; end
+
 module Berkshelf
-  # @author Jamie Winsor <reset@riotgames.com>
-  # @author Josiah Kiehl <jkiehl@riotgames.com>
   class InitGenerator < BaseGenerator
     def initialize(*args)
       super(*args)
@@ -11,23 +13,26 @@ module Berkshelf
 
     class_option :metadata_entry,
       type: :boolean,
-      default: false
+      default: true
 
     class_option :chefignore,
       type: :boolean,
-      default: false
+      default: true
 
     class_option :skip_vagrant,
       type: :boolean,
-      default: false
+      default: false,
+      desc: 'Skips adding a Vagrantfile and adding supporting gems to the Gemfile'
 
     class_option :skip_git,
       type: :boolean,
-      default: false
+      default: false,
+      desc: 'Skips adding a .gitignore and running git init in the cookbook directory'
 
     class_option :foodcritic,
       type: :boolean,
-      default: false
+      default: false,
+      desc: 'Creates a Thorfile with Foodcritic support to lint test your cookbook'
 
     class_option :chef_minitest,
       type: :boolean,
@@ -35,65 +40,82 @@ module Berkshelf
 
     class_option :scmversion,
       type: :boolean,
-      default: false
+      default: false,
+      desc: 'Creates a Thorfile with SCMVersion support to manage versions for continuous integration'
 
     class_option :no_bundler,
       type: :boolean,
-      default: false
+      default: false,
+      desc: 'Skips generation of a Gemfile and other Bundler specific support'
 
     class_option :cookbook_name,
       type: :string
 
-    class_option :berkshelf_config,
-      type: :hash,
-      default: Config.instance
+    if defined?(Kitchen::Generator::Init)
+      class_option :skip_test_kitchen,
+        type: :boolean,
+        default: false,
+        desc: 'Skip adding a testing environment to your cookbook'
+    end
 
-    # Generate the cookbook
     def generate
+      validate_cookbook
       validate_configuration
       check_option_support
 
-      template "Berksfile.erb", target.join("Berksfile")
+      template 'Berksfile.erb', target.join('Berksfile')
+      template 'Thorfile.erb', target.join('Thorfile')
 
       if options[:chefignore]
-        copy_file "chefignore", target.join(Berkshelf::Chef::Cookbook::Chefignore::FILENAME)
+        copy_file 'chefignore', target.join(Ridley::Chef::Chefignore::FILENAME)
       end
 
       unless options[:skip_git]
-        template "gitignore.erb", target.join(".gitignore")
+        template 'gitignore.erb', target.join('.gitignore')
 
-        unless File.exists?(target.join(".git"))
+        unless File.exists?(target.join('.git'))
           inside target do
-            run "git init", capture: true
+            run 'git init', capture: true
           end
         end
       end
 
-      if options[:foodcritic] || options[:scmversion]
-        template "Thorfile.erb", target.join("Thorfile")
-      end
-
       if options[:chef_minitest]
-        empty_directory target.join("files/default/tests/minitest/support")
-        template "default_test.rb.erb", target.join("files/default/tests/minitest/default_test.rb")
-        template "helpers.rb.erb", target.join("files/default/tests/minitest/support/helpers.rb")
+        empty_directory target.join('files/default/tests/minitest/support')
+        template 'default_test.rb.erb', target.join('files/default/tests/minitest/default_test.rb')
+        template 'helpers.rb.erb', target.join('files/default/tests/minitest/support/helpers.rb')
       end
 
       if options[:scmversion]
-        create_file target.join("VERSION"), "0.1.0"
+        create_file target.join('VERSION'), '0.1.0'
       end
 
       unless options[:no_bundler]
-        template "Gemfile.erb", target.join("Gemfile")
+        template 'Gemfile.erb', target.join('Gemfile')
+      end
+
+      if defined?(Kitchen::Generator::Init)
+        unless options[:skip_test_kitchen]
+          # Temporarily use Dir.chdir to ensure the destionation_root of test kitchen's generator
+          # is where we expect until this bug can be addressed:
+          # https://github.com/opscode/test-kitchen/pull/140
+          Dir.chdir target do
+            # Kitchen::Generator::Init.new([], {}, destination_root: target).invoke_all
+            Kitchen::Generator::Init.new([], {}).invoke_all
+          end
+        end
       end
 
       unless options[:skip_vagrant]
-        template "Vagrantfile.erb", target.join("Vagrantfile")
-        ::Berkshelf::Cli.new([], berksfile: target.join("Berksfile")).invoke(:install)
+        template 'Vagrantfile.erb', target.join('Vagrantfile')
       end
     end
 
     private
+
+      def berkshelf_config
+        Berkshelf.config
+      end
 
       # Read the cookbook name from the metadata.rb
       #
@@ -101,10 +123,23 @@ module Berkshelf
       #   name of the cookbook
       def cookbook_name
         @cookbook_name ||= begin
-          metadata = Ridley::Chef::Cookbook::Metadata.from_file(target.join("metadata.rb").to_s)
+          metadata = Ridley::Chef::Cookbook::Metadata.from_file(target.join('metadata.rb').to_s)
           metadata.name.empty? ? File.basename(target) : metadata.name
         rescue CookbookNotFound, IOError
           File.basename(target)
+        end
+      end
+
+      # Assert the current working directory is a cookbook
+      #
+      # @raise [NotACookbook] if the current working directory is
+      #   not a cookbook
+      #
+      # @return [nil]
+      def validate_cookbook
+        path = File.expand_path(File.join(target, 'metadata.rb'))
+        unless File.exists?(path)
+          raise Berkshelf::NotACookbook.new(path)
         end
       end
 
@@ -114,11 +149,10 @@ module Berkshelf
       #
       # @return [nil]
       def validate_configuration
-        unless Config.instance.valid?
-          raise InvalidConfiguration.new Config.instance.errors
+        unless Berkshelf.config.valid?
+          raise InvalidConfiguration.new Berkshelf.config.errors
         end
       end
-
 
       # Check for supporting gems for provided options
       #
@@ -127,7 +161,6 @@ module Berkshelf
         assert_option_supported(:foodcritic) &&
         assert_option_supported(:scmversion, 'thor-scmversion') &&
         assert_default_supported(:no_bundler, 'bundler')
-        # Vagrant is a dependency of Berkshelf; it will always appear available to the Berkshelf process.
       end
 
       # Warn if the supporting gem for an option is not installed

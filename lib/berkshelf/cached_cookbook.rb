@@ -1,5 +1,4 @@
 module Berkshelf
-  # @author Jamie Winsor <reset@riotgames.com>
   class CachedCookbook < Ridley::Chef::Cookbook
     class << self
       # @param [#to_s] path
@@ -13,11 +12,26 @@ module Berkshelf
         cached_name = File.basename(path.to_s).slice(DIRNAME_REGEXP, 1)
         return nil if cached_name.nil?
 
-        from_path(path, name: cached_name)
+        loaded_cookbooks[path.to_s] ||= from_path(path, name: cached_name)
       end
+
+      private
+
+        # @return [Hash<String, CachedCookbook>]
+        def loaded_cookbooks
+          @loaded_cookbooks ||= {}
+        end
     end
 
     DIRNAME_REGEXP = /^(.+)-(.+)$/
+
+    extend Forwardable
+
+    def_delegator :metadata, :description
+    def_delegator :metadata, :maintainer
+    def_delegator :metadata, :maintainer_email
+    def_delegator :metadata, :license
+    def_delegator :metadata, :platforms
 
     # @return [Hash]
     def dependencies
@@ -37,7 +51,31 @@ module Berkshelf
       end.join("\n")
     end
 
+    # High-level information about this cached cookbook in JSON format
+    #
+    # @return [String]
+    def pretty_json
+      JSON.pretty_generate(pretty_hash)
+    end
+
+    # High-level information about this cached cookbook in Hash format
+    #
+    # @return [Hash]
+    def pretty_hash
+      {}.tap do |h|
+        h[:name]          = cookbook_name unless cookbook_name.blank?
+        h[:version]       = version unless version.blank?
+        h[:description]   = description unless description.blank?
+        h[:author]        = maintainer unless maintainer.blank?
+        h[:email]         = maintainer_email unless maintainer_email.blank?
+        h[:license]       = license unless license.blank?
+        h[:platforms]     = platforms.to_hash unless platforms.blank?
+        h[:dependencies]  = dependencies.to_hash unless dependencies.blank?
+      end
+    end
+
     private
+
       def pretty_map(hash, padding)
         hash.map { |k,v| "#{k} (#{v})" }.join("\n" + ' '*padding)
       end

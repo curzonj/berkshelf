@@ -1,20 +1,22 @@
 require 'spec_helper'
 
 describe Berkshelf::CookbookGenerator do
-  subject { described_class }
-
-  let(:name) { "sparkle_motion" }
+  let(:name) { 'sparkle_motion' }
   let(:target) { tmp_path.join(name) }
+  let(:kitchen_generator) { double('kitchen-generator', invoke_all: nil) }
 
-  context "with default options" do
+  before do
+    Kitchen::Generator::Init.stub(:new).with(any_args()).and_return(kitchen_generator)
+  end
+
+  context 'with default options' do
     before do
-      capture(:stdout) { subject.new([target, name]).invoke_all }
+      capture(:stdout) { Berkshelf::CookbookGenerator.new([target, name]).invoke_all }
     end
 
-    specify do
+    it "generates a new cookbook" do
       expect(target).to have_structure {
         directory 'attributes'
-        directory 'definitions'
         directory 'files' do
           directory 'default'
         end
@@ -37,18 +39,22 @@ describe Berkshelf::CookbookGenerator do
           contains 'All rights reserved - Do Not Redistribute'
         end
         file 'README.md' do
-          contains '# sparkle_motion cookbook'
+          contains '# sparkle_motion-cookbook'
+          contains '### sparkle_motion::default'
+          contains "    <td><tt>['sparkle_motion']['bacon']</tt></td>"
+          contains "Include `sparkle_motion` in your node's `run_list`:"
+          contains '    "recipe[sparkle_motion::default]"'
           contains 'Author:: YOUR_NAME (<YOUR_EMAIL>)'
         end
         file 'metadata.rb' do
-          contains 'name             "sparkle_motion"'
-          contains 'maintainer       "YOUR_NAME"'
-          contains 'maintainer_email "YOUR_EMAIL"'
-          contains 'license          "All rights reserved"'
-          contains 'description      "Installs/Configures sparkle_motion"'
+          contains "name             'sparkle_motion'"
+          contains "maintainer       'YOUR_NAME'"
+          contains "maintainer_email 'YOUR_EMAIL'"
+          contains "license          'All rights reserved'"
+          contains "description      'Installs/Configures sparkle_motion'"
         end
         file 'Berksfile' do
-          contains 'site :opscode'
+          contains 'source "https://api.berkshelf.com"'
           contains 'metadata'
         end
         file 'Gemfile'
@@ -59,20 +65,29 @@ describe Berkshelf::CookbookGenerator do
 
   context "given a 'maintainer_email' option" do
     before do
-      @email = "jamie@vialstudios.com"
+      Kitchen::Generator::Init.stub(:new).with(any_args()).and_return(kitchen_generator)
       capture(:stdout) {
-        described_class.new([target, name], maintainer_email: @email).invoke_all
+        Berkshelf::CookbookGenerator.new([target, name], maintainer_email: 'jamie@vialstudios.com').invoke_all
       }
     end
 
     it "generates a metadata.rb with the 'maintainer_email' value set" do
-      email = @email
-
+      email = email
       expect(target).to have_structure {
         file 'metadata.rb' do
-          contains "maintainer_email \"#{email}\""
+          contains "maintainer_email 'jamie@vialstudios.com'"
         end
       }
+    end
+  end
+
+  context "given an invalid option for :license" do
+    subject(:run) do
+      capture(:stdout) { described_class.new([target, name], license: 'not-there').invoke_all }
+    end
+
+    it "raises a LicenseNotFound error" do
+      expect { run }.to raise_error(Berkshelf::LicenseNotFound)
     end
   end
 end

@@ -1,102 +1,62 @@
 require 'spec_helper'
 
-describe Berkshelf::Resolver, :chef_server, vcr: { record: :new_episodes, serialize_with: :yaml } do
-  let(:downloader ) { Berkshelf::Downloader.new(Berkshelf.cookbook_store) }
-  let(:berksfile) { double(downloader: downloader) }
-  let(:source) do
-    double('source',
-      name: 'mysql',
-      version_constraint: Solve::Constraint.new('= 1.2.4'),
-      downloaded?: true,
-      cached_cookbook: double('mysql-cookbook',
-        name: 'mysql-1.2.4',
-        cookbook_name: 'mysql',
-        version: '1.2.4',
-        dependencies: { "nginx" => ">= 0.1.0" }
-      ),
-      location: double('location', validate_cached: true)
-    )
-  end
+describe Berkshelf::Resolver do
+  let(:berksfile) { double('berksfile') }
+  let(:demand) { Berkshelf::Dependency.new(berksfile, "mysql", constraint: "= 1.2.4") }
 
   describe "ClassMethods" do
-    subject { described_class }
-
     describe "::initialize" do
-      it "adds the specified sources to the sources hash" do
-        resolver = subject.new(berksfile, sources: [source], skip_dependencies: true)
-
-        resolver.should have_source(source.name)
-      end
-
-      it "should not add dependencies if requested" do
-        resolver = subject.new(berksfile, sources: [source], skip_dependencies: true)
-
-        resolver.should_not have_source("nginx")
-      end
-
-      it "adds the dependencies of the source as sources" do
-        resolver = subject.new(berksfile, sources: [source])
-
-        resolver.should have_source("nginx")
+      it 'adds the specified dependencies to the dependencies hash' do
+        resolver = described_class.new(berksfile, demand)
+        expect(resolver).to have_demand(demand)
       end
     end
   end
 
-  subject { described_class.new(berksfile) }
+  subject { Berkshelf::Resolver.new(berksfile) }
 
-  describe "#add_source" do
-    let(:package_version) { double('package-version', dependencies: Array.new) }
-
-    it "adds the source to the instance of resolver" do
-      subject.add_source(source, false)
-
-      subject.sources.should include(source)
+  describe "#add_demand" do
+    it 'adds the demand to the instance of resolver' do
+      subject.add_demand(demand)
+      expect(subject.demands).to include(demand)
     end
 
-    it "adds an artifact of the same name of the source to the graph" do
-      subject.graph.should_receive(:artifacts).with(source.name, source.cached_cookbook.version)
+    it 'raises a DuplicateDemand exception if a demand of the same name is added' do
+      subject.should_receive(:has_demand?).with(demand).and_return(true)
 
-      subject.add_source(source, false)
+      expect {
+        subject.add_demand(demand)
+      }.to raise_error(Berkshelf::DuplicateDemand)
     end
+  end
 
-    it "adds the dependencies of the source as packages to the graph" do
-      subject.should_receive(:add_source_dependencies).with(source)
-
-      subject.add_source(source)
+  describe "#demands" do
+    it "returns an Array" do
+      expect(subject.demands).to be_a(Array)
     end
+  end
 
-    it "raises a DuplicateSourceDefined exception if a source of the same name is added" do
-      subject.should_receive(:has_source?).with(source).and_return(true)
+  describe "#get_demand" do
+    before { subject.add_demand(demand) }
 
-      lambda {
-        subject.add_source(source)
-      }.should raise_error(Berkshelf::DuplicateSourceDefined)
-    end
-
-    context "when include_dependencies is false" do
-      it "does not try to include_dependencies" do
-        subject.should_not_receive(:add_source_dependencies)
-
-        subject.add_source(source, false)
+    context 'given a string representation of the demand to retrieve' do
+      it 'returns a Berkshelf::Dependency of the same name' do
+        expect(subject.get_demand(demand.name)).to eq(demand)
       end
     end
   end
 
-  describe "#get_source" do
-    before { subject.add_source(source, false) }
+  describe '#has_demand?' do
+    before { subject.add_demand(demand) }
 
-    context "given a string representation of the source to retrieve" do
-      it "returns the source of the same name" do
-        subject.get_source(source.name).should eql(source)
-      end
+    it 'returns true if the demand exists' do
+      expect(subject.has_demand?(demand.name)).to be_true
+    end
+
+    it 'returns false if the demand does not exist' do
+      expect(subject.has_demand?('non-existent')).to be_false
     end
   end
 
-  describe "#has_source?" do
-    before { subject.add_source(source, false) }
-
-    it "returns the source of the given name" do
-      subject.has_source?(source.name).should be_true
-    end
-  end
+  describe "#resolve"
 end

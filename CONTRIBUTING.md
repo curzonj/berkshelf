@@ -17,13 +17,15 @@ If you'd like to submit a patch:
 
 ### Install prerequisites
 
+Install git and mercurial on your test system. (http://mercurial.selenic.com/wiki/Download)
+
 Install the latest version of [Bundler](http://gembundler.com)
 
     $ gem install bundler
 
 Clone the project
 
-    $ git clone git://github.com/RiotGames/berkshelf.git
+    $ git clone git://github.com/berkshelf/berkshelf.git
 
 and run:
 
@@ -34,9 +36,7 @@ Bundler will install all gems and their dependencies required for testing and de
 
 ### Running unit (RSpec) and acceptance (Cucumber) tests
 
-Simply copy the `spec/knife.rb.sample` to `spec/knife.rb`, and point it at a
-chef server. Berkshelf tests may upload and destroy cookbooks on your chef
-server, so be sure to configure a server safe for this task.
+We use Chef Zero - an in-memory Chef Server for running tests. It is automatically managed by the Specs and Cukes. Simply run:
 
     $ bundle exec guard start
 
